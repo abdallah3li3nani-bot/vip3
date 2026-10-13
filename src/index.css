@@ -1,0 +1,168 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* ============================ نظام التصميم ============================ */
+:root {
+  --brand: #2563eb;
+  --brand-600: #2563eb;
+  --brand-fg: #ffffff;
+  --accent: #0d9488;
+
+  --bg: #f5f6f8;
+  --surface: #ffffff;
+  --surface-2: #f2f4f7;
+  --surface-3: #e9edf2;
+  --border: #e2e6ec;
+  --border-strong: #cbd3dd;
+  --text: #101828;
+  --text-2: #475467;
+  --muted: #8a94a6;
+
+  --success: #12805c;
+  --success-bg: #e7f6ef;
+  --warning: #b25e09;
+  --warning-bg: #fdf3e5;
+  --danger: #c0362c;
+  --danger-bg: #fdeceb;
+  --info: #175cd3;
+  --info-bg: #eaf1fd;
+
+  --ring: color-mix(in oklab, var(--brand) 45%, transparent);
+  --shadow-1: 0 1px 2px rgba(16, 24, 40, .05);
+  --shadow-2: 0 4px 14px -4px rgba(16, 24, 40, .10), 0 2px 4px -2px rgba(16, 24, 40, .06);
+  --shadow-3: 0 18px 40px -14px rgba(16, 24, 40, .22);
+}
+
+.dark {
+  --bg: #0b1220;
+  --surface: #121a2a;
+  --surface-2: #172033;
+  --surface-3: #1e293c;
+  --border: #24304a;
+  --border-strong: #33415f;
+  --text: #e8edf6;
+  --text-2: #a7b3c7;
+  --muted: #7c8aa3;
+
+  --success: #4ade9f;
+  --success-bg: #10291f;
+  --warning: #f6b96a;
+  --warning-bg: #2b2113;
+  --danger: #fb8a80;
+  --danger-bg: #2c1614;
+  --info: #7cb0fb;
+  --info-bg: #12203a;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, .4);
+  --shadow-2: 0 6px 18px -6px rgba(0, 0, 0, .55);
+  --shadow-3: 0 22px 48px -18px rgba(0, 0, 0, .7);
+}
+
+@theme inline {
+  --font-sans: "Cairo", "IBM Plex Sans Arabic", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  --color-brand: var(--brand);
+  --color-brand-fg: var(--brand-fg);
+  --color-accent: var(--accent);
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-ink: var(--text);
+  --color-ink-2: var(--text-2);
+  --color-muted: var(--muted);
+
+  --color-success: var(--success);
+  --color-success-bg: var(--success-bg);
+  --color-warning: var(--warning);
+  --color-warning-bg: var(--warning-bg);
+  --color-danger: var(--danger);
+  --color-danger-bg: var(--danger-bg);
+  --color-info: var(--info);
+  --color-info-bg: var(--info-bg);
+
+  --radius-card: 1rem;
+  --shadow-soft: var(--shadow-1);
+  --shadow-card: var(--shadow-2);
+  --shadow-pop: var(--shadow-3);
+}
+
+@layer base {
+  * { border-color: var(--border); }
+
+  html { -webkit-text-size-adjust: 100%; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Cairo", "IBM Plex Sans Arabic", system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.65;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior-y: none;
+  }
+
+  h1, h2, h3, h4 { line-height: 1.35; font-weight: 700; letter-spacing: -0.01em; }
+
+  /* الأرقام دائمًا LTR داخل النص العربي */
+  .num { direction: ltr; unicode-bidi: isolate; font-variant-numeric: tabular-nums; }
+
+  ::selection { background: color-mix(in oklab, var(--brand) 25%, transparent); }
+
+  input, textarea, select, button { font-family: inherit; font-size: inherit; }
+
+  :focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 6px; }
+
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; border: 3px solid var(--bg); }
+  ::-webkit-scrollbar-thumb:hover { background: var(--muted); }
+}
+
+@layer utilities {
+  .safe-b { padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .safe-t { padding-top: env(safe-area-inset-top, 0px); }
+  .no-scrollbar::-webkit-scrollbar { display: none; }
+  .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .tap { -webkit-tap-highlight-color: transparent; }
+  .glass { background: color-mix(in oklab, var(--surface) 82%, transparent); backdrop-filter: blur(14px) saturate(1.4); }
+}
+
+/* ============================ حركات ناعمة ============================ */
+@keyframes fade-up { from { opacity: 0; transform: translateY(6px) } to { opacity: 1; transform: none } }
+@keyframes fade-in { from { opacity: 0 } to { opacity: 1 } }
+@keyframes shimmer { 100% { transform: translateX(-100%) } }
+@keyframes pop { 0% { transform: scale(.96); opacity: 0 } 100% { transform: scale(1); opacity: 1 } }
+
+.animate-fade-up { animation: fade-up .28s cubic-bezier(.22,.8,.3,1) both; }
+.animate-fade-in { animation: fade-in .2s ease both; }
+.animate-pop { animation: pop .18s cubic-bezier(.22,.8,.3,1) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+}
+
+/* ============================ هيكل التحميل ============================ */
+.skeleton {
+  position: relative; overflow: hidden;
+  background: var(--surface-2); border-radius: 8px;
+}
+.skeleton::after {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in oklab, var(--surface-3) 90%, transparent), transparent);
+  transform: translateX(100%); animation: shimmer 1.4s infinite;
+}
+
+/* ============================ الطباعة ============================ */
+@media print {
+  @page { margin: 14mm; size: A4; }
+  body { background: #fff !important; color: #000 !important; font-size: 12px; }
+  .no-print, nav, aside, header.app-header, .bottom-nav { display: none !important; }
+  .print-area { display: block !important; }
+  .print-card { break-inside: avoid; box-shadow: none !important; border: 1px solid #d0d5dd !important; }
+  a[href]::after { content: ""; }
+}
