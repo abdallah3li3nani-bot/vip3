@@ -3,12 +3,12 @@ import { useQuery } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
 import { addDays } from 'date-fns'
 import {
-  Check, CheckCheck, ClipboardCheck, Clock, Save, Users, X, AlertCircle, CalendarDays,
+  Check, CheckCheck, ClipboardCheck, Clock, Save, Users, X, AlertCircle, CalendarDays, CalendarX, RotateCcw,
 } from 'lucide-react'
 import { PageHeader } from '@/components/common/PageHeader'
 import {
   Avatar, Badge, Button, Card, CardContent, CardHeader, CardTitle, EmptyState,
-  ListSkeleton, Segmented, Select, Textarea, Modal, Field,
+  ListSkeleton, Segmented, Select, Textarea, Modal, Field, useConfirm,
 } from '@/components/ui'
 import { SessionBadge } from '@/components/common/Status'
 import { useAction, useLookups, useSessionAttendance, useSessions, useStudents, useStudentSubjects } from '@/lib/hooks'
@@ -29,6 +29,13 @@ export default function AttendancePage() {
   const to = range === 'today' ? todayISO() : range === 'week' ? isoOf(addDays(new Date(), 7)) : undefined
   const { data: sessions = [], isLoading } = useSessions(range === 'all' ? undefined : from, to)
   const { subjectName, groupName } = useLookups()
+
+  // لو اتفتحت حصة تانية من رابط وانت في نفس الصفحة، نتنقل لها
+  const urlSession = params.get('session') ?? ''
+  useEffect(() => {
+    if (urlSession && urlSession !== sessionId) setSessionId(urlSession)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlSession])
 
   useEffect(() => {
     if (sessionId) {
@@ -111,7 +118,7 @@ export default function AttendancePage() {
           )}
         </>
       ) : (
-        <AttendanceSheet session={resolved} onBack={() => { setSessionId(''); params.delete('session'); setParams(params, { replace: true }) }} />
+        <AttendanceSheet key={resolved.id} session={resolved} onBack={() => { setSessionId(''); params.delete('session'); setParams(params, { replace: true }) }} />
       )}
     </div>
   )
@@ -128,8 +135,26 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
   const [notes, setNotes] = useState<Record<string, string>>({})
   const [noteFor, setNoteFor] = useState<string | null>(null)
 
-  /** الحصة لم يحن موعدها بعد: العرض مسموح والتسجيل ممنوع */
-  const locked = isFutureSession(session.session_date)
+  const cancelled = session.status === 'cancelled'
+  /** الحصة لم يحن موعدها بعد أو ملغاة: العرض مسموح والتسجيل ممنوع */
+  const locked = isFutureSession(session.session_date) || cancelled
+  const confirm = useConfirm()
+  const [cancelOpen, setCancelOpen] = useState(false)
+  const [cancelReason, setCancelReason] = useState('')
+
+  const SESSION_KEYS = [['attendance'], ['sessions'], ['session'], ['cycles'], ['charges'], ['dashboard'], ['attendance-student'], ['attendance-all']]
+  const cancelAction = useAction(
+    async (status: 'cancelled' | 'scheduled') =>
+      api.cancelSession({ id: session.id, status, reason: status === 'cancelled' ? cancelReason.trim() || 'ظرف طارئ' : null }),
+    {
+      success: (r) =>
+        r.reverted > 0
+          ? `تم إلغاء الحصة ✓ ومش هتتحسب على ${r.reverted} طالب كانوا متسجلين حضور`
+          : 'تم تحديث الحصة ✓ — مش هتتحسب على أي طالب',
+      invalidate: SESSION_KEYS,
+      onDone: () => setCancelOpen(false),
+    },
+  )
 
   const roster = useMemo(() => {
     const inSubject = new Set(enrollments.filter((e) => e.subject_id === session.subject_id && e.is_active).map((e) => e.student_id))
@@ -197,7 +222,25 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
     <div className="space-y-4">
       <Button variant="ghost" size="sm" onClick={onBack} className="-mr-2">→ كل الحصص</Button>
 
-      {locked && (
+      {cancelled && (
+        <Card className="flex flex-wrap items-center gap-3 border-danger/40 bg-danger-bg p-3.5">
+          <CalendarX className="size-5 shrink-0 text-danger" />
+          <div className="min-w-0 flex-1">
+            <p className="text-[13.5px] font-bold text-danger">الحصة دي ملغاة ومش محسوبة على الطلاب</p>
+            {session.reason && <p className="mt-0.5 text-[12px] text-danger">السبب: {session.reason}</p>}
+          </div>
+          <Button
+            size="sm"
+            variant="secondary"
+            loading={cancelAction.isPending}
+            onClick={() => cancelAction.mutate('scheduled')}
+          >
+            <RotateCcw className="size-4" /> إعادة تفعيل الحصة
+          </Button>
+        </Card>
+      )}
+
+      {locked && !cancelled && (
         <Card className="flex items-start gap-3 border-warning/40 bg-warning-bg p-3.5">
           <CalendarDays className="mt-0.5 size-5 shrink-0 text-warning" />
           <div>
@@ -248,6 +291,19 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
               <X className="size-4" /> الجميع غائب
             </Button>
             <Button variant="ghost" size="sm" disabled={locked} onClick={() => setMarks({})}>مسح التحديد</Button>
+            {!cancelled && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="mr-auto text-danger"
+                onClick={() => {
+                  setCancelReason('')
+                  setCancelOpen(true)
+                }}
+              >
+                <CalendarX className="size-4" /> إلغاء الحصة (ظرف طارئ)
+              </Button>
+            )}
           </div>
         </CardContent>
       </Card>
@@ -313,7 +369,9 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
           <div className="safe-b fixed inset-x-0 bottom-14 z-20 border-t border-line glass p-3 lg:bottom-0 lg:static lg:border-0 lg:bg-transparent lg:p-0 lg:backdrop-blur-none">
             <div className="mx-auto flex max-w-[1400px] items-center gap-3">
               <p className="num flex-1 text-[12.5px] text-ink-2">
-                {locked
+                {cancelled
+                  ? 'الحصة ملغاة'
+                  : locked
                   ? 'تسجيل الحضور يفتح في يوم الحصة'
                   : `${stats.present + stats.absent + stats.late + stats.excused} / ${roster.length} تم تحديدهم`}
               </p>
@@ -330,6 +388,26 @@ function AttendanceSheet({ session, onBack }: { session: ClassSession; onBack: (
           </div>
         </>
       )}
+
+      <Modal
+        open={cancelOpen}
+        onOpenChange={setCancelOpen}
+        title="إلغاء الحصة"
+        description="الحصة الملغاة مش بتتحسب على أي طالب من الأربع حصص بتوع الشهر. ولو كنت سجلت حضور فيها، احتسابه بيتلغي."
+        size="sm"
+        footer={
+          <>
+            <Button variant="secondary" onClick={() => setCancelOpen(false)}>رجوع</Button>
+            <Button variant="danger" loading={cancelAction.isPending} onClick={() => cancelAction.mutate('cancelled')}>
+              <CalendarX className="size-4" /> تأكيد الإلغاء
+            </Button>
+          </>
+        }
+      >
+        <Field label="السبب">
+          <Textarea value={cancelReason} onChange={(e) => setCancelReason(e.target.value)} placeholder="مثال: ظرف طارئ / إجازة / انقطاع الكهرباء…" />
+        </Field>
+      </Modal>
 
       <Modal
         open={!!noteFor}

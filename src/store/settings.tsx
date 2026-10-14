@@ -20,7 +20,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   theme_mode: 'dark',
   currency: 'EGP',
   currency_symbol: 'ج.م',
-  default_sessions_per_cycle: 8,
+  default_sessions_per_cycle: 4,
   absence_counts_in_cycle: false,
   charge_on_cycle_start: true,
   pricing_bundles: {

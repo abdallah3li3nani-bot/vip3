@@ -15,6 +15,7 @@ import { Money } from '@/components/common/Money'
 import { AttendanceBadge, PAYMENT_METHOD_LABEL } from '@/components/common/Status'
 import { StudentForm } from './StudentForm'
 import { EnrollSubjectsModal } from './EnrollSubjectsModal'
+import { CycleTimeline } from './CycleTimeline'
 import { PaymentDialog, ChargeDialog } from '@/features/finance/dialogs'
 import {
   useAction, useCharges, useCycles, useLookups, usePayments,
@@ -33,6 +34,7 @@ const TABS = [
   { v: 'finance', label: 'المستحقات والديون', icon: Wallet },
   { v: 'booklets', label: 'المذكرات والكتب', icon: BookText },
   { v: 'subjects', label: 'المواد والاشتراك', icon: BookOpen },
+  { v: 'months', label: 'الشهور والحصص', icon: CalendarCheck },
   { v: 'attendance', label: 'الحضور', icon: CalendarCheck },
   { v: 'payments', label: 'المدفوعات', icon: ReceiptText },
 ]
@@ -42,7 +44,7 @@ export default function StudentProfilePage() {
   const { settings } = useSettings()
   const confirm = useConfirm()
   const { data: student, isLoading } = useStudent(id)
-  const { yearName, groupName, subjectById, subjectName } = useLookups()
+  const { yearName, groupName, subjectById, subjectName, subjects } = useLookups()
   const { data: ss = [] } = useStudentSubjects(id)
   const { data: cycles = [] } = useCycles(id)
   const { data: charges = [] } = useCharges(id)
@@ -310,6 +312,18 @@ export default function StudentProfilePage() {
               })}
             </div>
           )}
+        </TabsPrimitive.Content>
+
+        {/* ---------------- ملخص الشهور ---------------- */}
+        <TabsPrimitive.Content value="months" className="outline-none">
+          <CycleTimeline
+            cycles={cycles}
+            attendance={attendance}
+            sessions={sessions}
+            charges={charges}
+            subjects={subjects}
+            absenceCounts={!!settings.absence_counts_in_cycle}
+          />
         </TabsPrimitive.Content>
 
         {/* ---------------- المذكرات والكتب ---------------- */}

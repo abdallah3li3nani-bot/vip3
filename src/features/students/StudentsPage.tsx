@@ -449,6 +449,7 @@ export default function StudentsPage() {
                           danger
                           onClick={async () => {
                             const ok = await confirm({
+                              requirePassword: true,
                               title: 'حذف الطالب',
                               message: `هل أنت متأكد من حذف الطالب «${s.full_name}» نهائياً؟`,
                               confirmText: 'نعم، احذف',

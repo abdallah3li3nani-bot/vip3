@@ -11,7 +11,8 @@ import { PageHeader } from '@/components/common/PageHeader'
 import { StatCard } from '@/components/common/StatCard'
 import { Money } from '@/components/common/Money'
 import { Button, Card, CardContent, CardHeader, CardTitle, EmptyState, StatSkeleton, Badge, Avatar } from '@/components/ui'
-import { useDashboard, useSessions, useLookups, useStudents, useBalances, useBookletOrders } from '@/lib/hooks'
+import { useDashboard, useSessions, useLookups, useStudents, useBalances, useBookletOrders, useGradeStats } from '@/lib/hooks'
+import { FinanceSplit, GradeCards } from './GradeInsights'
 import { fmtDate, fmtNumber, fmtTime, todayISO } from '@/lib/format'
 import { useUi } from '@/store/ui'
 import { SessionBadge } from '@/components/common/Status'
@@ -44,9 +45,14 @@ export default function DashboardPage() {
     [stats],
   )
 
-  const pendingBooklets = useMemo(() => {
-    return bookletOrders.filter((o) => !o.is_delivered).length
-  }, [bookletOrders])
+  const { stats: gradeStats } = useGradeStats()
+
+  // عدد الطلاب (مش الحجوزات) اللي لسه ما استلموش مذكرة واحدة على الأقل
+  const pendingBooklets = useMemo(
+    () => new Set(bookletOrders.filter((o) => !o.is_delivered).map((o) => o.student_id)).size,
+    [bookletOrders],
+  )
+  const pendingCopies = useMemo(() => bookletOrders.filter((o) => !o.is_delivered).length, [bookletOrders])
 
   return (
     <div className="space-y-5 pb-12">
@@ -56,7 +62,7 @@ export default function DashboardPage() {
         actions={
           <div className="flex flex-wrap gap-2">
             <Button variant="secondary" size="sm" onClick={() => nav('/booklets')}>
-              <BookText className="size-4" /> المذكرات ({bookletOrders.length})
+              <BookText className="size-4" /> المذكرات
             </Button>
             <Button variant="secondary" size="sm" onClick={() => nav('/attendance')}>
               <ClipboardCheck className="size-4" /> تسجيل حضور
@@ -83,9 +89,9 @@ export default function DashboardPage() {
               onClick={() => nav('/students')}
             />
             <StatCard
-              label="المذكرات قيد التسليم"
+              label="طلاب لسه ما استلموش مذكرات"
               value={<span className="num text-blue-600">{fmtNumber(pendingBooklets)}</span>}
-              hint={`${fmtNumber(bookletOrders.length)} حجز كلي`}
+              hint={`${fmtNumber(pendingCopies)} نسخة مطلوب تسليمها`}
               icon={BookText}
               tone="info"
               onClick={() => nav('/booklets')}
@@ -108,38 +114,25 @@ export default function DashboardPage() {
             />
           </div>
 
-          {/* ============ الأرقام المالية ============ */}
-          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-            <StatCard
-              label="إجمالي الديون المعلقة"
-              value={<Money value={stats.outstanding + stats.booklets_debt} className="text-danger" />}
-              hint="دروس ومذكرات"
-              icon={Wallet}
-              tone="danger"
-              onClick={() => nav('/finance')}
-            />
-            <StatCard
-              label="إجمالي المحصّل"
-              value={<Money value={stats.total_paid} className="text-success" />}
-              hint="دروس ومذكرات"
-              icon={UserCheck}
-              tone="success"
-            />
-            <StatCard
-              label="مبيعات المذكرات"
-              value={<Money value={bookletOrders.reduce((sum, o) => sum + o.price, 0)} />}
-              hint="إجمالي قيمة الحجوزات"
-              icon={TrendingUp}
-              tone="brand"
-              onClick={() => nav('/booklets')}
-            />
-            <StatCard
-              label="تحصيل هذا الشهر"
-              value={<Money value={stats.paid_this_month} />}
-              icon={TrendingUp}
-              tone="info"
-            />
-          </div>
+          {/* ============ الحسابات: الدروس لوحدها والمذكرات لوحدها ============ */}
+          <section className="space-y-2">
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <h2 className="text-[15px] font-extrabold text-ink">الحسابات</h2>
+              <p className="text-[12px] text-ink-2">
+                تحصيل هذا الشهر: <Money value={stats.paid_this_month} className="font-bold text-ink" />
+              </p>
+            </div>
+            <FinanceSplit stats={gradeStats} />
+          </section>
+
+          {/* ============ تفاصيل كل صف ============ */}
+          <section className="space-y-2">
+            <div className="flex flex-wrap items-end justify-between gap-2">
+              <h2 className="text-[15px] font-extrabold text-ink">تفاصيل الصفوف</h2>
+              <p className="text-[11.5px] text-muted">اضغط على أي رقم لعرض أسماء الطلاب</p>
+            </div>
+            <GradeCards stats={gradeStats} />
+          </section>
 
           <div className="grid gap-4 lg:grid-cols-5">
             {/* ============ الرسم البياني ============ */}

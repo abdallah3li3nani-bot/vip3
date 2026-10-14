@@ -37,6 +37,8 @@ export interface AppSettings {
   report_footer: string | null
   /** آخر تاريخ تم فيه حفظ نسخة احتياطية كملف على الجهاز */
   last_file_backup_at?: string | null
+  /** تكاليف المذكرات (طباعة/تصوير...) لكل صف لحساب صافي الربح */
+  booklet_costs?: BookletCost[]
   /** إصدار ترحيل البيانات الداخلي */
   data_version?: number
   updated_at: string
@@ -193,6 +195,16 @@ export interface PaymentAllocation {
   payment_id: string
   charge_id: string
   amount: number
+  created_at: string
+}
+
+/** بند تكلفة مذكرات لصف معيّن (مثلاً: طباعة 100 نسخة) */
+export interface BookletCost {
+  id: string
+  year_id: string
+  title: string
+  amount: number
+  date: string
   created_at: string
 }
 

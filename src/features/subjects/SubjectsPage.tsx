@@ -168,7 +168,7 @@ export default function SubjectsPage() {
                             <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted">
                               <span className="font-mono font-bold text-ink">{fmtMoney(s.price)}</span>
                               <span>•</span>
-                              <span>{s.sessions_per_cycle} حصص/دورة</span>
+                              <span>الشهر = {s.sessions_per_cycle} حصص</span>
                               <span>•</span>
                               <span className="flex items-center gap-1 font-semibold text-emerald-600">
                                 <Users className="size-3" /> {studentCount} مشترك
@@ -194,6 +194,7 @@ export default function SubjectsPage() {
                               danger
                               onClick={async () => {
                                 const ok = await confirm({
+                                  requirePassword: true,
                                   title: 'حذف المادة',
                                   message: `حذف «${s.name}»؟`,
                                   confirmText: 'نعم، احذف',
@@ -260,7 +261,7 @@ function SubjectFormDialog({
   const [name, setName] = useState('')
   const [yearId, setYearId] = useState('')
   const [price, setPrice] = useState('150')
-  const [sessionsPerCycle, setSessionsPerCycle] = useState('8')
+  const [sessionsPerCycle, setSessionsPerCycle] = useState('4')
   const [color, setColor] = useState('#2563eb')
 
   useEffect(() => {
@@ -275,7 +276,7 @@ function SubjectFormDialog({
         setName('')
         setYearId(years[0]?.id || '')
         setPrice('150')
-        setSessionsPerCycle('8')
+        setSessionsPerCycle('4')
         setColor('#2563eb')
       }
     }
@@ -295,7 +296,7 @@ function SubjectFormDialog({
       name: name.trim(),
       year_id: yearId,
       price: Number(price || 0),
-      sessions_per_cycle: Number(sessionsPerCycle || 8),
+      sessions_per_cycle: Number(sessionsPerCycle || 4),
       color,
     })
   }

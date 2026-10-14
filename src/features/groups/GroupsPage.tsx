@@ -98,6 +98,7 @@ export default function GroupsPage() {
                         danger
                         onSelect={() =>
                           confirm({
+                            requirePassword: true,
                             title: 'حذف السنة الدراسية',
                             message: `سيتم حذف «${y.name}» وكل مجموعاتها وموادها. الطلاب لن يُحذفوا لكن سيفقدون ارتباطهم بها.`,
                             onConfirm: () => delYear.mutateAsync(y.id),
@@ -147,6 +148,7 @@ export default function GroupsPage() {
                                   danger
                                   onSelect={() =>
                                     confirm({
+                                      requirePassword: true,
                                       title: 'حذف المجموعة',
                                       message: `سيتم حذف «${g.name}». الطلاب سيبقون لكن بدون مجموعة.`,
                                       onConfirm: () => delGroup.mutateAsync(g.id),

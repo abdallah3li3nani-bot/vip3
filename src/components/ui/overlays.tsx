@@ -115,6 +115,8 @@ interface ConfirmState {
   tone?: 'danger' | 'brand'
   /** مرادف قديم: destructive=true يعني tone='danger' */
   destructive?: boolean
+  /** طلب كلمة سر التطبيق قبل التنفيذ (للحذف المهم) */
+  requirePassword?: boolean
   onConfirm?: () => void | Promise<void>
   /** يُستدعى داخلياً لإرجاع نتيجة await confirm(...) */
   _resolve?: (ok: boolean) => void
@@ -126,6 +128,8 @@ const ConfirmCtx = React.createContext<ConfirmFn>(async () => false)
 export function ConfirmProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = React.useState<ConfirmState | null>(null)
   const [busy, setBusy] = React.useState(false)
+  const [pass, setPass] = React.useState('')
+  const [passErr, setPassErr] = React.useState('')
 
   const close = React.useCallback(() => {
     setState((cur) => {
@@ -136,6 +140,14 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
 
   const run = React.useCallback(async () => {
     if (!state) return
+    if (state.requirePassword) {
+      const { getSettings } = await import('@/lib/api')
+      const s = await getSettings()
+      if (pass.trim() !== String(s.password || '1234').trim()) {
+        setPassErr('كلمة السر غير صحيحة')
+        return
+      }
+    }
     try {
       setBusy(true)
       if (state.onConfirm) await state.onConfirm()
@@ -144,6 +156,11 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setBusy(false)
     }
+  }, [state, pass])
+
+  React.useEffect(() => {
+    setPass('')
+    setPassErr('')
   }, [state])
 
   /** يدعم الأسلوبين: confirm({ onConfirm }) أو const ok = await confirm({...}) */
@@ -185,6 +202,30 @@ export function ConfirmProvider({ children }: { children: React.ReactNode }) {
         <p className="text-[14px] leading-relaxed text-ink-2">
           {state?.message ?? 'لا يمكن التراجع عن هذه العملية.'}
         </p>
+        {state?.requirePassword && (
+          <form
+            className="mt-3 space-y-1.5"
+            onSubmit={(e) => {
+              e.preventDefault()
+              run()
+            }}
+          >
+            <label className="text-[12.5px] font-bold text-ink">اكتب كلمة سر التطبيق للتأكيد</label>
+            <input
+              type="password"
+              autoFocus
+              value={pass}
+              onChange={(e) => {
+                setPass(e.target.value)
+                setPassErr('')
+              }}
+              className="h-11 w-full rounded-xl border border-line bg-surface px-3 text-[15px] text-ink outline-none focus:border-[var(--brand)]"
+              placeholder="••••"
+              autoComplete="current-password"
+            />
+            {passErr && <p className="text-[12px] font-bold text-danger">{passErr}</p>}
+          </form>
+        )}
       </Modal>
     </ConfirmCtx.Provider>
   )

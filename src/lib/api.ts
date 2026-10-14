@@ -26,6 +26,7 @@ import type {
   BookletOrder,
   BackupSnapshot,
   PaymentSplit,
+  BookletCost,
   AppSettings,
   DashboardStats,
 } from './database.types'
@@ -85,7 +86,7 @@ export const saveSubject = async (s: Partial<Subject>): Promise<Subject> => {
     year_id: s.year_id || '',
     name: s.name || 'مادة جديدة',
     price: Number(s.price ?? 0),
-    sessions_per_cycle: Number(s.sessions_per_cycle ?? 8),
+    sessions_per_cycle: Number(s.sessions_per_cycle ?? 4),
     color: s.color || '#2563eb',
     is_active: s.is_active ?? true,
     notes: s.notes ?? null,
@@ -366,12 +367,99 @@ export const saveSession = async (s: Partial<ClassSession>): Promise<ClassSessio
   return dbPut('sessions', row)
 }
 
-export const deleteSession = async (id: string): Promise<void> => {
-  await dbDelete('sessions', id)
-  const attendances = await dbGetAll<Attendance>('attendance')
-  for (const a of attendances) {
-    if (a.session_id === id) await dbDelete('attendance', a.id)
+/** إلغاء احتساب حضور حصة على دورات الطلاب ومسح سجل حضورها */
+const revertSessionAttendance = async (session: ClassSession): Promise<number> => {
+  const settings = await getSettings()
+  const counts = (st?: Attendance['status']) =>
+    st === 'present' || st === 'late' || (settings.absence_counts_in_cycle && st === 'absent')
+  const atts = (await dbGetAll<Attendance>('attendance')).filter((a) => a.session_id === session.id)
+  let reverted = 0
+  for (const a of atts) {
+    if (counts(a.status)) {
+      await applyCycleDelta(a.student_id, session.subject_id, -1)
+      reverted++
+    }
+    await dbDelete('attendance', a.id)
   }
+  return reverted
+}
+
+/** حذف حصة نهائياً (مع إرجاع احتسابها من دورات الطلاب) */
+export const deleteSession = async (id: string): Promise<void> => {
+  const session = await dbGetById<ClassSession>('sessions', id)
+  if (session) await revertSessionAttendance(session)
+  await dbDelete('sessions', id)
+}
+
+/**
+ * إلغاء أو تأجيل حصة (ظرف طارئ): الحصة لا تُحتسب على أي طالب،
+ * ولو كان اتسجل حضور فيها بيتلغي احتسابه من دورة الأربع حصص.
+ */
+export const cancelSession = async (params: {
+  id: string
+  status: 'cancelled' | 'postponed' | 'scheduled'
+  reason?: string | null
+  rescheduledTo?: string | null
+}): Promise<{ reverted: number }> => {
+  const session = await dbGetById<ClassSession>('sessions', params.id)
+  if (!session) throw new Error('الحصة غير موجودة')
+  let reverted = 0
+  if (params.status !== 'scheduled') reverted = await revertSessionAttendance(session)
+  session.status = params.status
+  session.reason = params.reason || null
+  session.rescheduled_to = params.status === 'postponed' ? params.rescheduledTo || null : null
+  if (params.status === 'postponed' && params.rescheduledTo) session.session_date = params.rescheduledTo
+  session.updated_at = new Date().toISOString()
+  await dbPut('sessions', session)
+  return { reverted }
+}
+
+/**
+ * جدولة تلقائية: حصص متكررة لمجموعة في أيام محددة من الأسبوع، كل يوم بوقته،
+ * من تاريخ بداية لعدد أسابيع. لا تتكرر حصة موجودة بنفس المادة والمجموعة والتاريخ والوقت.
+ */
+export const autoSchedule = async (params: {
+  subjectId: string
+  groupId: string | null
+  /** 0 = الأحد ... 6 = السبت (زي Date.getDay) */
+  slots: { weekday: number; start: string; end?: string | null }[]
+  fromDate: string
+  weeks: number
+  location?: string | null
+}): Promise<{ created: number; skipped: number }> => {
+  if (!params.subjectId) throw new Error('اختر المادة')
+  if (params.slots.length === 0) throw new Error('اختر يوم واحد على الأقل')
+  const weeks = Math.max(1, Math.min(52, Math.round(params.weeks)))
+  const existing = await dbGetAll<ClassSession>('sessions')
+  const key = (d: string, t: string | null) => `${params.subjectId}|${params.groupId || ''}|${d}|${(t || '').slice(0, 5)}`
+  const seen = new Set(existing.map((s) => `${s.subject_id}|${s.group_id || ''}|${s.session_date}|${(s.start_time || '').slice(0, 5)}`))
+  const [y, m, d] = params.fromDate.split('-').map(Number)
+  const start = new Date(y, m - 1, d)
+  const last = new Date(y, m - 1, d + weeks * 7 - 1)
+  let created = 0
+  let skipped = 0
+  for (let day = new Date(start); day <= last; day.setDate(day.getDate() + 1)) {
+    for (const slot of params.slots.filter((x) => x.weekday === day.getDay())) {
+      const iso = localISO(day)
+      const k = key(iso, slot.start || null)
+      if (seen.has(k)) {
+        skipped++
+        continue
+      }
+      seen.add(k)
+      await saveSession({
+        subject_id: params.subjectId,
+        group_id: params.groupId,
+        session_date: iso,
+        start_time: slot.start || null,
+        end_time: slot.end || null,
+        location: params.location || null,
+        status: 'scheduled',
+      })
+      created++
+    }
+  }
+  return { created, skipped }
 }
 
 /* ================================= الحضور =================================*/
@@ -404,6 +492,7 @@ export const saveSessionAttendance = async (
 ): Promise<{ saved: number; chargesCreated: number }> => {
   const session = await dbGetById<ClassSession>('sessions', sessionId)
   if (!session) throw new Error('الحصة غير موجودة')
+  if (session.status === 'cancelled') throw new Error('الحصة ملغاة — أعد تفعيلها أولاً لتسجيل الحضور')
   const settings = await getSettings()
   const counts = (st?: Attendance['status']) =>
     st === 'present' || st === 'late' || (settings.absence_counts_in_cycle && st === 'absent')
@@ -427,7 +516,7 @@ export const saveSessionAttendance = async (
     if (delta !== 0) chargesCreated += await applyCycleDelta(r.student_id, session.subject_id, delta)
   }
 
-  if (session.status === 'scheduled') {
+  if (session.status === 'scheduled' || session.status === 'postponed') {
     session.status = 'done'
     session.updated_at = now
     await dbPut('sessions', session)
@@ -499,7 +588,7 @@ export const openCycle = async (studentId: string, subjectId: string): Promise<C
     student_id: studentId,
     subject_id: subjectId,
     cycle_index: index,
-    sessions_target: subject.sessions_per_cycle || settings.default_sessions_per_cycle || 8,
+    sessions_target: subject.sessions_per_cycle || settings.default_sessions_per_cycle || 4,
     sessions_done: 0,
     status: 'open',
   })
@@ -684,7 +773,7 @@ export const deleteBooklet = async (id: string): Promise<void> => {
   // حذف الحجوزات المرتبطة
   const orders = await dbGetAll<BookletOrder>('booklet_orders')
   for (const o of orders) {
-    if (o.booklet_id === id) await dbDelete('booklet_orders', o.id)
+    if (o.booklet_id === id) await deleteBookletOrder(o.id)
   }
 }
 
@@ -1017,7 +1106,7 @@ export const getSettings = async (): Promise<AppSettings> => {
       theme_mode: 'dark',
       currency: 'EGP',
       currency_symbol: 'ج.م',
-      default_sessions_per_cycle: 8,
+      default_sessions_per_cycle: 4,
       absence_counts_in_cycle: false,
       charge_on_cycle_start: true,
       pricing_bundles: {
@@ -1073,6 +1162,34 @@ export const importBackupJSON = async (jsonString: string): Promise<void> => {
 }
 
 export { triggerDailyRollingBackup, ensureStoragePersistence, getStorageStatus }
+
+/* ============================ تكاليف المذكرات ============================ */
+export const listBookletCosts = async (): Promise<BookletCost[]> => {
+  const s = await getSettings()
+  return [...(s.booklet_costs || [])].sort((a, b) => b.date.localeCompare(a.date) || b.created_at.localeCompare(a.created_at))
+}
+
+export const addBookletCost = async (c: { year_id: string; title: string; amount: number; date?: string }): Promise<BookletCost> => {
+  if (!c.year_id) throw new Error('اختر الصف')
+  const amount = Number(c.amount)
+  if (!(amount > 0)) throw new Error('أدخل مبلغ التكلفة')
+  const row: BookletCost = {
+    id: uid(),
+    year_id: c.year_id,
+    title: c.title.trim() || 'تكلفة طباعة مذكرات',
+    amount,
+    date: c.date || new Date().toISOString().slice(0, 10),
+    created_at: new Date().toISOString(),
+  }
+  const s = await getSettings()
+  await saveSettings({ booklet_costs: [...(s.booklet_costs || []), row] })
+  return row
+}
+
+export const deleteBookletCost = async (id: string): Promise<void> => {
+  const s = await getSettings()
+  await saveSettings({ booklet_costs: (s.booklet_costs || []).filter((c) => c.id !== id) })
+}
 
 /** تسجيل أن المستخدم حفظ نسخة كملف على جهازه */
 export const markFileBackupDone = async (): Promise<void> => {

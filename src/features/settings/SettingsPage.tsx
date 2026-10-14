@@ -364,6 +364,7 @@ function BackupTab() {
     if (!file) return
 
     const ok = await confirm({
+      requirePassword: true,
       title: 'استعادة نسخة احتياطية',
       message: `تنبيه: استعادة النسخة من «${file.name}» ستقوم باستبدال كافة البيانات الحالية ببيانات النسخة الاحتياطية. هل تريد المتابعة؟`,
       confirmText: 'نعم، استعد البيانات',
@@ -538,6 +539,7 @@ function BackupTab() {
                     variant="secondary"
                     onClick={async () => {
                       const ok = await confirm({
+                        requirePassword: true,
                         title: 'استرجاع النسخة التلقائية',
                         message: `هل أنت متأكد من استرجاع بيانات يوم ${b.date}؟ سيتم استبدال البيانات الحالية.`,
                         confirmText: 'نعم، استرجع',

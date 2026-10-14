@@ -2,6 +2,7 @@ import { useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient, type QueryKey } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import * as api from './api'
+import { computeGradeStats, type GradeStats } from './gradeStats'
 import type { Charge, Student, Booklet, BookletOrder, BackupSnapshot } from './database.types'
 
 const FIVE_MIN = 5 * 60 * 1000
@@ -58,6 +59,8 @@ export const useBookletOrders = (opts?: { bookletId?: string; studentId?: string
     queryKey: ['booklet_orders', opts?.bookletId ?? 'all', opts?.studentId ?? 'all', opts?.isDelivered ?? 'all'],
     queryFn: () => api.listBookletOrders(opts),
   })
+
+export const useBookletCosts = () => useQuery({ queryKey: ['booklet_costs'], queryFn: api.listBookletCosts })
 
 /* ========================== النسخ والبيانات ==========================*/
 export const useBackups = () => useQuery({ queryKey: ['backups'], queryFn: api.listBackups })
@@ -179,4 +182,35 @@ export function useLookups() {
 
 export function studentLabel(s: Student) {
   return `${s.full_name} (${s.specialization || 'عام'})`
+}
+
+
+/** إحصائيات كل صف (دروس + مذكرات + تكاليف) محسوبة من البيانات المحلية */
+export function useGradeStats(): { stats: GradeStats[]; isLoading: boolean } {
+  const years = useYears()
+  const subjects = useSubjects()
+  const students = useStudents()
+  const enrollments = useStudentSubjects()
+  const charges = useCharges()
+  const orders = useBookletOrders()
+  const booklets = useBooklets()
+  const costs = useBookletCosts()
+  const stats = useMemo(
+    () =>
+      computeGradeStats({
+        years: years.data ?? [],
+        students: students.data ?? [],
+        enrollments: enrollments.data ?? [],
+        subjects: subjects.data ?? [],
+        charges: charges.data ?? [],
+        orders: orders.data ?? [],
+        booklets: booklets.data ?? [],
+        costs: costs.data ?? [],
+      }),
+    [years.data, students.data, enrollments.data, subjects.data, charges.data, orders.data, booklets.data, costs.data],
+  )
+  return {
+    stats,
+    isLoading: years.isLoading || students.isLoading || orders.isLoading || charges.isLoading,
+  }
 }

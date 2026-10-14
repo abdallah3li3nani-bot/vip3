@@ -27,6 +27,7 @@ export default function SchedulePage() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<ClassSession | null>(null)
   const [statusFor, setStatusFor] = useState<ClassSession | null>(null)
+  const [autoOpen, setAutoOpen] = useState(false)
   const { subjectName, groupName, subjectById } = useLookups()
   const confirm = useConfirm()
   const nav = useNavigate()
@@ -54,7 +55,10 @@ export default function SchedulePage() {
     return m
   }, [sessions])
 
-  const remove = useAction(api.deleteSession, { success: 'تم حذف الحصة', invalidate: [['sessions'], ['dashboard']] })
+  const remove = useAction(api.deleteSession, {
+    success: 'تم حذف الحصة وإلغاء احتسابها من دورات الطلاب',
+    invalidate: [['sessions'], ['dashboard'], ['cycles'], ['charges'], ['attendance'], ['attendance-all'], ['attendance-student']],
+  })
 
   function shift(dir: number) {
     if (view === 'day') setCursor(addDays(cursor, dir))
@@ -115,8 +119,9 @@ export default function SchedulePage() {
               danger
               onSelect={() =>
                 confirm({
+                  requirePassword: true,
                   title: 'حذف الحصة',
-                  message: 'سيتم حذف الحصة وسجل الحضور المرتبط بها، وسيُعاد حساب دورات الطلاب.',
+                  message: 'سيتم حذف الحصة وسجل الحضور المرتبط بها، ولن تُحتسب على أي طالب.',
                   onConfirm: () => remove.mutateAsync(s.id),
                 })
               }
@@ -136,9 +141,14 @@ export default function SchedulePage() {
         icon={CalendarDays}
         subtitle={title}
         actions={
-          <Button size="sm" onClick={() => { setEditing(null); setOpen(true) }}>
-            <CalendarPlus className="size-4" /> حصة جديدة
-          </Button>
+          <>
+            <Button variant="secondary" size="sm" onClick={() => { setEditing(null); setOpen(true) }}>
+              <CalendarPlus className="size-4" /> حصة واحدة
+            </Button>
+            <Button size="sm" onClick={() => setAutoOpen(true)}>
+              <Repeat className="size-4" /> جدولة تلقائية لمجموعة
+            </Button>
+          </>
         }
       />
 
@@ -235,6 +245,7 @@ export default function SchedulePage() {
 
       <SessionForm open={open} onOpenChange={setOpen} session={editing} defaultDate={isoOf(cursor)} />
       <StatusDialog session={statusFor} onClose={() => setStatusFor(null)} />
+      <AutoScheduleDialog open={autoOpen} onOpenChange={setAutoOpen} onDone={(from) => { setCursor(new Date(from + 'T00:00:00')); setView('month') }} />
     </div>
   )
 }
@@ -392,17 +403,19 @@ function StatusDialog({ session, onClose }: { session: ClassSession | null; onCl
   const save = useAction(
     async () => {
       if (!session) return
-      return api.saveSession({
+      return api.cancelSession({
         id: session.id,
         status,
-        rescheduled_to: status === 'postponed' ? to || null : null,
         reason: reason.trim() || null,
-        ...(status === 'postponed' && to ? { session_date: to } : {}),
+        rescheduledTo: status === 'postponed' ? to || null : null,
       })
     },
     {
-      success: 'تم تحديث حالة الحصة ✓',
-      invalidate: [['sessions'], ['cycles'], ['charges'], ['dashboard']],
+      success: (r) =>
+        r && r.reverted > 0
+          ? `تم تحديث الحصة ✓ واتلغى احتسابها لـ ${r.reverted} طالب`
+          : 'تم تحديث حالة الحصة ✓',
+      invalidate: [['sessions'], ['session'], ['cycles'], ['charges'], ['dashboard'], ['attendance'], ['attendance-all'], ['attendance-student']],
       onDone: onClose,
     },
   )
@@ -451,6 +464,192 @@ function StatusDialog({ session, onClose }: { session: ClassSession | null; onCl
         <Field label="السبب">
           <Textarea value={reason} onChange={(e) => setReason(e.target.value)} placeholder="مثال: ظرف طارئ…" />
         </Field>
+      </div>
+    </Modal>
+  )
+}
+
+/* --------------------------- جدولة تلقائية لمجموعة --------------------------- */
+// ترتيب الأيام بداية من السبت، والقيمة = Date.getDay()
+const WEEK: { d: number; label: string }[] = [
+  { d: 6, label: 'السبت' }, { d: 0, label: 'الأحد' }, { d: 1, label: 'الاثنين' }, { d: 2, label: 'الثلاثاء' },
+  { d: 3, label: 'الأربعاء' }, { d: 4, label: 'الخميس' }, { d: 5, label: 'الجمعة' },
+]
+
+function AutoScheduleDialog({
+  open, onOpenChange, onDone,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onDone: (fromDate: string) => void
+}) {
+  const { years, groups, subjects } = useLookups()
+  const [year, setYear] = useState('')
+  const [subjectId, setSubjectId] = useState('')
+  const [groupId, setGroupId] = useState('')
+  const [from, setFrom] = useState(todayISO())
+  const [weeks, setWeeks] = useState('4')
+  const [location, setLocation] = useState('')
+  const [slots, setSlots] = useState<Record<number, { on: boolean; start: string; end: string }>>({})
+
+  useEffect(() => {
+    if (!open) return
+    setYear(years[0]?.id ?? '')
+    setSubjectId('')
+    setGroupId('')
+    setFrom(todayISO())
+    setWeeks('4')
+    setLocation('')
+    setSlots({})
+  }, [open, years])
+
+  const ySubjects = useMemo(() => subjects.filter((s) => s.year_id === year && s.is_active), [subjects, year])
+  const yGroups = useMemo(() => groups.filter((g) => g.year_id === year), [groups, year])
+  const chosen = WEEK.filter((w) => slots[w.d]?.on)
+  const w = Math.max(1, Math.min(52, Number(weeks) || 1))
+  const subject = ySubjects.find((s) => s.id === subjectId)
+
+  // معاينة أول الحصص
+  const preview = useMemo(() => {
+    if (!from || chosen.length === 0) return [] as { date: string; label: string; time: string }[]
+    const out: { date: string; label: string; time: string }[] = []
+    const start = new Date(from + 'T00:00:00')
+    for (let i = 0; i < w * 7; i++) {
+      const d = addDays(start, i)
+      const slot = slots[d.getDay()]
+      if (slot?.on) out.push({ date: isoOf(d), label: AR_DAYS[d.getDay()], time: slot.start })
+    }
+    return out
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [from, w, slots])
+
+  const save = useAction(
+    async () => {
+      if (!subjectId) throw new Error('اختر المادة')
+      if (chosen.length === 0) throw new Error('اختر يوم واحد على الأقل')
+      if (chosen.some((c) => !slots[c.d].start)) throw new Error('حدد وقت بداية كل يوم')
+      return api.autoSchedule({
+        subjectId,
+        groupId: groupId || null,
+        slots: chosen.map((c) => ({ weekday: c.d, start: slots[c.d].start, end: slots[c.d].end || null })),
+        fromDate: from,
+        weeks: w,
+        location: location.trim() || null,
+      })
+    },
+    {
+      success: (r) =>
+        `تم جدولة ${r.created} حصة على التقويم ✓${r.skipped ? ` (تم تخطي ${r.skipped} حصة موجودة بالفعل)` : ''}`,
+      invalidate: [['sessions'], ['dashboard']],
+      onDone: () => {
+        onOpenChange(false)
+        onDone(from)
+      },
+    },
+  )
+
+  return (
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      title="جدولة تلقائية لحصص مجموعة"
+      description="اختار أيام الحصص في الأسبوع ووقت كل يوم، والتطبيق يرتبها على التقويم لعدد الأسابيع اللي تحدده"
+      size="lg"
+      footer={
+        <>
+          <Button variant="secondary" onClick={() => onOpenChange(false)}>إلغاء</Button>
+          <Button onClick={() => save.mutate(undefined as never)} loading={save.isPending} disabled={preview.length === 0 || !subjectId}>
+            جدولة {preview.length} حصة
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="الصف الدراسي">
+            <Select value={year} onChange={(e) => { setYear(e.target.value); setSubjectId(''); setGroupId('') }}>
+              {years.map((y) => <option key={y.id} value={y.id}>{y.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="المادة" required>
+            <Select value={subjectId} onChange={(e) => setSubjectId(e.target.value)}>
+              <option value="">— اختر —</option>
+              {ySubjects.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+            </Select>
+          </Field>
+          <Field label="المجموعة">
+            <Select value={groupId} onChange={(e) => setGroupId(e.target.value)}>
+              <option value="">— كل طلاب المادة —</option>
+              {yGroups.map((g) => <option key={g.id} value={g.id}>{g.name}</option>)}
+            </Select>
+          </Field>
+        </div>
+
+        <Field label="أيام الحصص في الأسبوع ووقت كل يوم" required>
+          <div className="space-y-1.5">
+            {WEEK.map(({ d, label }) => {
+              const sl = slots[d] || { on: false, start: '', end: '' }
+              return (
+                <div
+                  key={d}
+                  className={cn(
+                    'flex flex-wrap items-center gap-2 rounded-xl border p-2 transition',
+                    sl.on ? 'border-[var(--brand)] bg-[color-mix(in_oklab,var(--brand)_7%,transparent)]' : 'border-line',
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => setSlots({ ...slots, [d]: { ...sl, on: !sl.on, start: sl.start || '16:00' } })}
+                    className={cn(
+                      'tap w-24 rounded-lg px-2 py-1.5 text-[13px] font-bold transition',
+                      sl.on ? 'bg-[var(--brand)] text-white' : 'bg-surface-2 text-ink-2',
+                    )}
+                  >
+                    {label}
+                  </button>
+                  {sl.on && (
+                    <div className="flex items-center gap-1.5 text-[12px] text-ink-2">
+                      من
+                      <Input type="time" dir="ltr" className="num h-9 w-28" value={sl.start} onChange={(e) => setSlots({ ...slots, [d]: { ...sl, start: e.target.value } })} />
+                      إلى
+                      <Input type="time" dir="ltr" className="num h-9 w-28" value={sl.end} onChange={(e) => setSlots({ ...slots, [d]: { ...sl, end: e.target.value } })} />
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </Field>
+
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Field label="تبدأ من تاريخ" required>
+            <Input type="date" dir="ltr" className="num text-right" value={from} onChange={(e) => setFrom(e.target.value)} />
+          </Field>
+          <Field label="لمدة (أسابيع)" hint={subject ? `الشهر في «${subject.name}» = ${subject.sessions_per_cycle} حصص` : undefined}>
+            <div className="flex gap-1.5">
+              <Input dir="ltr" inputMode="numeric" className="num w-20 text-right" value={weeks} onChange={(e) => setWeeks(e.target.value)} />
+              {['4', '8', '12'].map((n) => (
+                <Button key={n} type="button" size="sm" variant={weeks === n ? 'subtle' : 'secondary'} onClick={() => setWeeks(n)}>{n}</Button>
+              ))}
+            </div>
+          </Field>
+          <Field label="المكان">
+            <Input value={location} onChange={(e) => setLocation(e.target.value)} placeholder="السنتر…" />
+          </Field>
+        </div>
+
+        {preview.length > 0 && (
+          <div className="rounded-xl border border-line bg-surface-2 p-3">
+            <p className="mb-2 text-[12.5px] font-bold text-ink">معاينة: {preview.length} حصة</p>
+            <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto">
+              {preview.map((p) => (
+                <span key={p.date + p.time} className="rounded-lg bg-surface px-2 py-1 text-[11.5px] text-ink-2">
+                  {p.label} <span className="num">{fmtDate(p.date)}</span> • <span className="num">{fmtTime(p.time)}</span>
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </Modal>
   )

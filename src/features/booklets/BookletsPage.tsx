@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { MultiBookletOrderDialog } from './MultiBookletOrderDialog'
 import {
   BookText, Plus, CheckCircle2, Clock, Wallet, Banknote, Smartphone,
@@ -115,13 +115,36 @@ export default function BookletsPage() {
     })
   }, [orders, studentMap, bookletMap, selectedYear, selectedBookletFilter, activeTab, searchQuery])
 
+  // تجميع الحجوزات حسب الطالب: كل طالب يظهر ويتعد مرة واحدة مهما كان عدد مذكراته
+  const studentGroups = useMemo(() => {
+    const m = new Map<string, { studentId: string; orders: BookletOrder[]; price: number; paid: number; remaining: number; last: string }>()
+    for (const o of filteredOrders) {
+      let g = m.get(o.student_id)
+      if (!g) {
+        g = { studentId: o.student_id, orders: [], price: 0, paid: 0, remaining: 0, last: '' }
+        m.set(o.student_id, g)
+      }
+      g.orders.push(o)
+      g.price += o.price
+      g.paid += o.paid_amount
+      g.remaining += o.remaining_amount
+      if (o.created_at > g.last) g.last = o.created_at
+    }
+    return [...m.values()].sort((a, b) => b.last.localeCompare(a.last))
+  }, [filteredOrders])
+
   // الحسابات المالية والإحصائيات
   const stats = useMemo(() => {
     let totalSales = 0
     let totalCollected = 0
     let totalRemaining = 0
-    let pendingDeliveryCount = 0
-    let deliveredWithDebtCount = 0
+    // أعداد بالطلاب (مش بالحجوزات)
+    const studentsAll = new Set<string>()
+    const studentsPending = new Set<string>()
+    const studentsDeliveredDebt = new Set<string>()
+    const studentsDebt = new Set<string>()
+    const studentsDone = new Map<string, boolean>()
+    let pendingCopies = 0
 
     let cashTotal = 0
     let walletTotal = 0
@@ -132,8 +155,15 @@ export default function BookletsPage() {
       totalCollected += o.paid_amount
       totalRemaining += o.remaining_amount
 
-      if (!o.is_delivered) pendingDeliveryCount++
-      if (o.is_delivered && o.remaining_amount > 0) deliveredWithDebtCount++
+      studentsAll.add(o.student_id)
+      if (!o.is_delivered) {
+        studentsPending.add(o.student_id)
+        pendingCopies++
+      }
+      if (o.is_delivered && o.remaining_amount > 0) studentsDeliveredDebt.add(o.student_id)
+      if (o.remaining_amount > 0) studentsDebt.add(o.student_id)
+      const done = o.is_delivered && o.remaining_amount <= 0
+      studentsDone.set(o.student_id, (studentsDone.get(o.student_id) ?? true) && done)
 
       if (o.payment_method === 'cash') cashTotal += o.paid_amount
       else if (o.payment_method === 'wallet') walletTotal += o.paid_amount
@@ -144,8 +174,12 @@ export default function BookletsPage() {
       totalSales,
       totalCollected,
       totalRemaining,
-      pendingDeliveryCount,
-      deliveredWithDebtCount,
+      studentsCount: studentsAll.size,
+      pendingDeliveryCount: studentsPending.size,
+      pendingCopies,
+      deliveredWithDebtCount: studentsDeliveredDebt.size,
+      debtStudents: studentsDebt.size,
+      completedStudents: [...studentsDone.values()].filter(Boolean).length,
       cashTotal,
       walletTotal,
       instapayTotal,
@@ -189,6 +223,15 @@ export default function BookletsPage() {
           ? `تم تسليم ${data.count} مذكرة بنجاح وتسجيل المديونيات الحالية ✓`
           : `تم إلغاء تسليم ${data.count} مذكرة بنجاح`,
       invalidate: [['booklet_orders'], ['dashboard'], ['payments']],
+    },
+  )
+
+  // تسليم كل مذكرات طالب واحد
+  const deliverStudentOrders = useAction(
+    async (ids: string[]) => api.bulkDeliverBookletOrders(ids, true),
+    {
+      success: (n) => `تم تسليم ${n} مذكرة للطالب ✓`,
+      invalidate: [['booklet_orders'], ['dashboard']],
     },
   )
 
@@ -270,7 +313,7 @@ export default function BookletsPage() {
         <Card className="p-4">
           <p className="text-[12px] font-semibold text-muted">إجمالي المبيعات</p>
           <p className="mt-1 text-xl font-extrabold text-ink">{fmtMoney(stats.totalSales)}</p>
-          <p className="mt-1 text-[11px] text-muted">{orders.length} حجز مسجل</p>
+          <p className="mt-1 text-[11px] text-muted">{stats.studentsCount} طالب • {orders.length} مذكرة محجوزة</p>
         </Card>
 
         <Card className="p-4 border-emerald-500/20 bg-emerald-500/5">
@@ -291,7 +334,7 @@ export default function BookletsPage() {
             {fmtMoney(stats.totalRemaining)}
           </p>
           <p className="mt-1 text-[11px] text-amber-600/80">
-            {stats.deliveredWithDebtCount} استلموا وعليهم متبقي
+            {stats.debtStudents} طالب عليهم متبقي
           </p>
         </Card>
 
@@ -300,7 +343,7 @@ export default function BookletsPage() {
           <p className="mt-1 text-xl font-extrabold text-blue-700 dark:text-blue-300">
             {stats.pendingDeliveryCount} طالب
           </p>
-          <p className="mt-1 text-[11px] text-blue-600/80">عدد النسخ المطلوب تجهيزها</p>
+          <p className="mt-1 text-[11px] text-blue-600/80">{stats.pendingCopies} نسخة مطلوب تجهيزها</p>
         </Card>
       </div>
 
@@ -392,7 +435,7 @@ export default function BookletsPage() {
                 : 'bg-surface text-ink-2 hover:bg-surface-2'
             }`}
           >
-            الكل ({orders.length})
+            الكل ({stats.studentsCount} طالب)
           </button>
           <button
             onClick={() => setActiveTab('not_delivered')}
@@ -422,7 +465,7 @@ export default function BookletsPage() {
                 : 'bg-surface text-ink-2 hover:bg-surface-2'
             }`}
           >
-            عليه متبقي فلوس
+            عليه متبقي فلوس ({stats.debtStudents})
           </button>
           <button
             onClick={() => setActiveTab('completed')}
@@ -432,7 +475,7 @@ export default function BookletsPage() {
                 : 'bg-surface text-ink-2 hover:bg-surface-2'
             }`}
           >
-            مسدد ومستلم بالكامل
+            مسدد ومستلم بالكامل ({stats.completedStudents})
           </button>
         </div>
       </div>
@@ -443,7 +486,7 @@ export default function BookletsPage() {
           <div className="flex items-center gap-2">
             <CheckSquare className="size-5 text-[var(--brand)]" />
             <span className="text-sm font-extrabold text-ink">
-              تم تحديد {selectedOrderIds.size} من أصل {filteredOrders.length} حجز
+              تم تحديد {selectedOrderIds.size} مذكرة من أصل {filteredOrders.length}
             </span>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -484,7 +527,7 @@ export default function BookletsPage() {
               onChange={toggleSelectAll}
               className="size-4 rounded border-gray-300 text-[var(--brand)] focus:ring-[var(--brand)]"
             />
-            <span>تحديد الكل ({filteredOrders.length} طلب معروض)</span>
+            <span>تحديد الكل ({studentGroups.length} طالب • {filteredOrders.length} مذكرة)</span>
           </label>
           <span className="text-muted">
             {selectedOrderIds.size > 0 ? `${selectedOrderIds.size} محدد` : 'اضغط المربع لتحديد طلبات معاً'}
@@ -525,157 +568,167 @@ export default function BookletsPage() {
         </Card>
       ) : (
         <div className="grid gap-3">
-          {filteredOrders.map((order) => {
-            const student = studentMap.get(order.student_id)
-            const booklet = bookletMap.get(order.booklet_id)
-            const isDelivered = order.is_delivered
-            const hasDebt = order.remaining_amount > 0
-
-            const isSelected = selectedOrderIds.has(order.id)
-
+          {studentGroups.map((g) => {
+            const student = studentMap.get(g.studentId)
+            const groupIds = g.orders.map((o) => o.id)
+            const allChecked = groupIds.every((id) => selectedOrderIds.has(id))
+            const someChecked = !allChecked && groupIds.some((id) => selectedOrderIds.has(id))
+            const undelivered = g.orders.filter((o) => !o.is_delivered)
             return (
               <Card
-                key={order.id}
-                className={`p-4 transition-all hover:border-[var(--brand)]/40 ${
-                  isSelected ? 'border-[var(--brand)] bg-[var(--brand)]/5 shadow-sm' : ''
+                key={g.studentId}
+                className={`overflow-hidden transition-all hover:border-[var(--brand)]/40 ${
+                  allChecked ? 'border-[var(--brand)] bg-[var(--brand)]/5' : ''
                 }`}
               >
-                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                  {/* مربع التحديد ومعلومات الطالب والمذكرة */}
+                {/* رأس الطالب: مرة واحدة مهما كان عدد المذكرات */}
+                <div className="flex flex-col gap-2 border-b border-[var(--border)] p-4 sm:flex-row sm:items-center sm:justify-between">
                   <div className="flex items-start gap-3">
                     <button
                       type="button"
-                      onClick={() => toggleSelectOrder(order.id)}
-                      className="mt-1 tap text-[var(--brand)] shrink-0"
-                      title={isSelected ? 'إلغاء التحديد' : 'تحديد'}
+                      onClick={() =>
+                        setSelectedOrderIds((prev) => {
+                          const next = new Set(prev)
+                          if (allChecked) groupIds.forEach((id) => next.delete(id))
+                          else groupIds.forEach((id) => next.add(id))
+                          return next
+                        })
+                      }
+                      className="tap mt-0.5 shrink-0"
+                      title={allChecked ? 'إلغاء تحديد مذكرات الطالب' : 'تحديد كل مذكرات الطالب'}
                     >
-                      {isSelected ? (
-                        <CheckSquare className="size-5 text-[var(--brand)] fill-[var(--brand)]/20" />
+                      {allChecked ? (
+                        <CheckSquare className="size-5 fill-[var(--brand)]/20 text-[var(--brand)]" />
                       ) : (
-                        <Square className="size-5 text-muted hover:text-ink" />
+                        <Square className={`size-5 ${someChecked ? 'text-[var(--brand)]' : 'text-muted'}`} />
                       )}
                     </button>
-
                     <div className="space-y-1">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-base font-bold text-ink">
-                          {student?.full_name || 'طالب غير معروف'}
-                        </span>
-                      {student?.specialization && (
-                        <Badge variant="secondary" className="text-[11px]">
-                          {student.specialization}
+                        {student ? (
+                          <Link to={`/students/${student.id}`} className="text-base font-bold text-ink hover:text-[var(--brand)]">
+                            {student.full_name}
+                          </Link>
+                        ) : (
+                          <span className="text-base font-bold text-ink">طالب غير معروف</span>
+                        )}
+                        {student?.year_id && (
+                          <Badge variant="outline" className="text-[11px]">{yearName.get(student.year_id) || ''}</Badge>
+                        )}
+                        {student?.specialization && student.specialization !== 'عام' && (
+                          <Badge variant="secondary" className="text-[11px]">{student.specialization}</Badge>
+                        )}
+                        <Badge tone="brand" className="text-[11px]">
+                          {g.orders.length} {g.orders.length === 1 ? 'مذكرة' : g.orders.length === 2 ? 'مذكرتين' : 'مذكرات'}
                         </Badge>
-                      )}
-                      {student?.year_id && (
-                        <Badge variant="outline" className="text-[11px]">
-                          {yearName.get(student.year_id) || ''}
-                        </Badge>
-                      )}
+                      </div>
+                      <p className="text-xs text-muted">
+                        الإجمالي <span className="font-mono font-bold text-ink">{fmtMoney(g.price)}</span>
+                        {' • '}مدفوع <span className="font-mono font-bold text-emerald-600">{fmtMoney(g.paid)}</span>
+                        {' • '}
+                        {g.remaining > 0 ? (
+                          <span className="font-bold text-amber-600">متبقي {fmtMoney(g.remaining)}</span>
+                        ) : (
+                          <span className="font-bold text-emerald-600">مسدد بالكامل ✓</span>
+                        )}
+                      </p>
                     </div>
-
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-muted">
-                      <span className="font-semibold text-ink-2">{booklet?.title}</span>
-                      <span>•</span>
-                      <span>سعر المذكرة: <span className="font-mono font-bold text-ink">{fmtMoney(order.price)}</span></span>
-                      <span>•</span>
-                      <span>تاريخ الحجز: {fmtDate(order.created_at)}</span>
-                    </div>
-
-                    {order.notes && (
-                      <p className="text-[11px] text-muted italic">ملاحظات: {order.notes}</p>
-                    )}
                   </div>
+                  {undelivered.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="secondary"
+                      loading={deliverStudentOrders.isPending}
+                      onClick={() => deliverStudentOrders.mutate(undelivered.map((o) => o.id))}
+                      className="shrink-0 text-xs"
+                    >
+                      <CheckCircle2 className="size-4" /> تسليم {undelivered.length === 1 ? 'المذكرة' : `الـ ${undelivered.length} مذكرات`}
+                    </Button>
+                  )}
                 </div>
 
-                  {/* الجزء المالي وطريقة الدفع وحالة التسليم */}
-                  <div className="flex flex-wrap items-center gap-3">
-                    {/* وسيلة الدفع والمبالغ */}
-                    <div className="text-left">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <Badge
-                          variant={
-                            order.payment_method === 'cash'
-                              ? 'default'
-                              : order.payment_method === 'wallet'
-                              ? 'warning'
-                              : 'info'
-                          }
-                          className="text-[11px]"
-                        >
-                          {order.payment_method === 'cash' && <Banknote className="mr-1 size-3 inline" />}
-                          {order.payment_method === 'wallet' && <Smartphone className="mr-1 size-3 inline" />}
-                          {order.payment_method === 'instapay' && <Wallet className="mr-1 size-3 inline" />}
-                          {order.payment_method === 'cash'
-                            ? 'كاش'
-                            : order.payment_method === 'wallet'
-                            ? 'محفظة'
-                            : 'انستاباي'}
-                        </Badge>
-                        <span className="text-xs font-semibold text-ink-2">
-                          مدفوع: <span className="font-mono font-bold text-emerald-600">{fmtMoney(order.paid_amount)}</span>
-                        </span>
+                {/* مذكرات الطالب */}
+                <div className="divide-y divide-[var(--border)]">
+                  {g.orders.map((order) => {
+                    const booklet = bookletMap.get(order.booklet_id)
+                    const isSelected = selectedOrderIds.has(order.id)
+                    const hasDebt = order.remaining_amount > 0
+                    return (
+                      <div
+                        key={order.id}
+                        className={`flex flex-col gap-2 px-4 py-3 sm:flex-row sm:items-center sm:justify-between ${isSelected ? 'bg-[var(--brand)]/5' : ''}`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <button type="button" onClick={() => toggleSelectOrder(order.id)} className="tap mt-0.5 shrink-0">
+                            {isSelected ? (
+                              <CheckSquare className="size-4 text-[var(--brand)]" />
+                            ) : (
+                              <Square className="size-4 text-muted" />
+                            )}
+                          </button>
+                          <div>
+                            <p className="text-sm font-semibold text-ink">{booklet?.title || 'مذكرة محذوفة'}</p>
+                            <p className="text-[11px] text-muted">
+                              {fmtMoney(order.price)} • مدفوع{' '}
+                              <span className="font-bold text-emerald-600">{fmtMoney(order.paid_amount)}</span>
+                              {hasDebt && (
+                                <>
+                                  {' '}• <span className="font-bold text-amber-600">متبقي {fmtMoney(order.remaining_amount)}</span>
+                                </>
+                              )}
+                              {' '}• {order.payment_method === 'cash' ? 'كاش' : order.payment_method === 'wallet' ? 'محفظة' : 'انستاباي'}
+                              {' '}• {fmtDate(order.created_at)}
+                            </p>
+                            {order.notes && <p className="text-[11px] italic text-muted">{order.notes}</p>}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1.5 self-end sm:self-auto">
+                          <button
+                            onClick={() => toggleDelivery.mutate(order.id)}
+                            disabled={toggleDelivery.isPending}
+                            className={`tap flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs font-bold transition-all ${
+                              order.is_delivered
+                                ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
+                                : 'bg-blue-600 text-white shadow-sm hover:bg-blue-700'
+                            }`}
+                            title={order.is_delivered ? 'اضغط لإلغاء التسليم' : 'اضغط لإتمام التسليم'}
+                          >
+                            {order.is_delivered ? (
+                              <><CheckCircle2 className="size-4" /> تم التسليم</>
+                            ) : (
+                              <><Clock className="size-4" /> تسليم</>
+                            )}
+                          </button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => {
+                              setEditingOrder(order)
+                              setOrderModalOpen(true)
+                            }}
+                          >
+                            <Edit3 className="size-4 text-muted" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={async () => {
+                              const ok = await confirm({
+                                requirePassword: true,
+                                title: 'حذف حجز المذكرة',
+                                message: `حذف «${booklet?.title || 'المذكرة'}» من حجوزات الطالب «${student?.full_name}»؟`,
+                                confirmText: 'نعم، احذف',
+                                tone: 'danger',
+                              })
+                              if (ok) deleteOrder.mutate(order.id)
+                            }}
+                          >
+                            <Trash2 className="size-4 text-rose-500" />
+                          </Button>
+                        </div>
                       </div>
-
-                      {hasDebt ? (
-                        <p className="mt-0.5 text-xs font-bold text-amber-600 dark:text-amber-400">
-                          متبقي دين: {fmtMoney(order.remaining_amount)}
-                        </p>
-                      ) : (
-                        <p className="mt-0.5 text-[11px] text-emerald-600">مسدد بالكامل ✓</p>
-                      )}
-                    </div>
-
-                    {/* زر التسليم التفاعلي بنقرة واحدة */}
-                    <button
-                      onClick={() => toggleDelivery.mutate(order.id)}
-                      disabled={toggleDelivery.isPending}
-                      className={`tap flex items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition-all ${
-                        isDelivered
-                          ? 'bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20 dark:text-emerald-400'
-                          : 'bg-blue-600 text-white shadow-sm hover:bg-blue-700'
-                      }`}
-                      title={isDelivered ? 'اضغط لإلغاء التسليم' : 'اضغط لإتمام التسليم'}
-                    >
-                      {isDelivered ? (
-                        <>
-                          <CheckCircle2 className="size-4" /> تم التسليم
-                        </>
-                      ) : (
-                        <>
-                          <Clock className="size-4" /> تسليم المذكرة
-                        </>
-                      )}
-                    </button>
-
-                    {/* أزرار التعديل والحذف */}
-                    <div className="flex items-center gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => {
-                          setEditingOrder(order)
-                          setOrderModalOpen(true)
-                        }}
-                      >
-                        <Edit3 className="size-4 text-muted" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={async () => {
-                          const ok = await confirm({
-                            title: 'حذف طلب المذكرة',
-                            message: `هل أنت متأكد من حذف حجز المذكرة للطالب «${student?.full_name}»؟`,
-                            confirmText: 'نعم، احذف',
-                            tone: 'danger',
-                          })
-                          if (ok) deleteOrder.mutate(order.id)
-                        }}
-                      >
-                        <Trash2 className="size-4 text-rose-500" />
-                      </Button>
-                    </div>
-                  </div>
+                    )
+                  })}
                 </div>
               </Card>
             )
@@ -711,7 +764,18 @@ export default function BookletsPage() {
         onOpenChange={setCatalogModalOpen}
         booklets={booklets}
         years={years}
-        onDelete={(id) => deleteBooklet.mutate(id)}
+        onDelete={async (id) => {
+          const b = bookletMap.get(id)
+          const count = orders.filter((o) => o.booklet_id === id).length
+          const ok = await confirm({
+            requirePassword: true,
+            title: 'حذف المذكرة من الكتالوج',
+            message: `حذف «${b?.title || 'المذكرة'}»${count ? ` سيحذف معها ${count} حجز للطلاب ومدفوعاتهم` : ''}. لا يمكن التراجع.`,
+            confirmText: 'نعم، احذف',
+            tone: 'danger',
+          })
+          if (ok) deleteBooklet.mutate(id)
+        }}
       />
 
       {/* مودال توزيع وتسليم مذكرة لصف بالكامل */}
@@ -1078,7 +1142,7 @@ function BookletsCatalogDialog({
   onOpenChange: (open: boolean) => void
   booklets: Booklet[]
   years: any[]
-  onDelete: (id: string) => void
+  onDelete: (id: string) => void | Promise<void>
 }) {
   const [formOpen, setFormOpen] = useState(false)
   const [editing, setEditing] = useState<Booklet | null>(null)

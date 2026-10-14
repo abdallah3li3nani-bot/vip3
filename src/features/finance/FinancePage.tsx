@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
+import { BookletsFinance } from './BookletsFinance'
 import {
   AlertTriangle, Download, Plus, ReceiptText, Trash2, TrendingUp, Wallet, CheckCircle2, Printer,
 } from 'lucide-react'
@@ -17,10 +18,16 @@ import * as api from '@/lib/api'
 import { exportCsv, matches } from '@/lib/utils'
 import { fmtDate, fmtTime } from '@/lib/format'
 
-type Tab = 'debtors' | 'charges' | 'payments'
+type Tab = 'debtors' | 'charges' | 'payments' | 'booklets'
 
 export default function FinancePage() {
-  const [tab, setTab] = useState<Tab>('debtors')
+  const [params, setParams] = useSearchParams()
+  const tab = ((params.get('tab') as Tab) || 'debtors') as Tab
+  const setTab = (t: Tab) => {
+    params.set('tab', t)
+    setParams(params, { replace: true })
+  }
+  const [source, setSource] = useState<'all' | 'lessons' | 'booklets'>('all')
   const [q, setQ] = useState('')
   const [year, setYear] = useState('')
   const [payOpen, setPayOpen] = useState(false)
@@ -37,15 +44,18 @@ export default function FinancePage() {
   const studentById = useMemo(() => new Map(students.map((s) => [s.id, s])), [students])
 
   const totals = useMemo(() => {
-    let outstanding = 0
+    let lessonsOut = 0
+    let bookletsOut = 0
     let debtorCount = 0
     for (const b of balances.values()) {
-      outstanding += b.outstanding
+      lessonsOut += b.lessonsOutstanding
+      bookletsOut += b.bookletsOutstanding
       if (b.outstanding > 0.001) debtorCount++
     }
-    const paid = payments.filter((p) => !p.void_at).reduce((a, p) => a + Number(p.amount), 0)
-    return { outstanding, paid, debtorCount }
-  }, [payments, balances])
+    const live = charges.filter((c) => !c.void_at)
+    const lessonsPaid = live.reduce((a, c) => a + Number(c.paid_amount), 0)
+    return { lessonsOut, bookletsOut, lessonsPaid, debtorCount }
+  }, [charges, balances])
 
   const debtors = useMemo(
     () =>
@@ -72,9 +82,11 @@ export default function FinancePage() {
       payments.filter((p) => {
         const s = studentById.get(p.student_id)
         if (year && s?.year_id !== year) return false
+        if (source === 'booklets' && p.source !== 'booklet') return false
+        if (source === 'lessons' && p.source === 'booklet') return false
         return matches(`${s?.full_name ?? ''} ${s?.code ?? ''} ${p.notes ?? ''}`, q)
       }),
-    [payments, studentById, year, q],
+    [payments, studentById, year, q, source],
   )
 
   const voidCharge = useAction(({ id, reason }: { id: string; reason: string }) => api.voidCharge(id, reason), {
@@ -148,10 +160,17 @@ export default function FinancePage() {
       />
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <StatCard label="المستحق حاليًا (دروس ومذكرات)" value={<Money value={totals.outstanding} className="text-danger" />} icon={AlertTriangle} tone="danger" />
-        <StatCard label="إجمالي المحصّل" value={<Money value={totals.paid} className="text-success" />} icon={CheckCircle2} tone="success" />
-        <StatCard label="تحصيل هذا الشهر" value={<Money value={dash?.paid_this_month ?? 0} />} icon={TrendingUp} tone="brand" />
-        <StatCard label="طلاب عليهم مستحقات" value={<span className="num">{totals.debtorCount}</span>} icon={Wallet} tone="warning" />
+        <StatCard label="محصّل الدروس" value={<Money value={totals.lessonsPaid} className="text-success" />} icon={CheckCircle2} tone="success" />
+        <StatCard label="متبقي الدروس" value={<Money value={totals.lessonsOut} className="text-danger" />} icon={AlertTriangle} tone="danger" />
+        <StatCard
+          label="متبقي المذكرات"
+          value={<Money value={totals.bookletsOut} className="text-warning" />}
+          icon={TrendingUp}
+          tone="warning"
+          onClick={() => setTab('booklets')}
+          hint="اضغط لحسابات المذكرات"
+        />
+        <StatCard label="طلاب عليهم مستحقات" value={<span className="num">{totals.debtorCount}</span>} icon={Wallet} tone="brand" />
       </div>
 
       <div className="mb-4 space-y-3">
@@ -162,9 +181,10 @@ export default function FinancePage() {
             { value: 'debtors', label: 'المتأخرات' },
             { value: 'charges', label: 'المستحقات' },
             { value: 'payments', label: 'المدفوعات' },
+            { value: 'booklets', label: 'حسابات المذكرات' },
           ]}
         />
-        <div className="flex gap-2">
+        <div className={`flex gap-2 ${tab === 'booklets' ? 'hidden' : ''}`}>
           <SearchInput value={q} onChange={setQ} className="flex-1" placeholder="ابحث بالاسم أو الكود…" />
           <Select value={year} onChange={(e) => setYear(e.target.value)} className="w-44 shrink-0">
             <option value="">كل السنوات</option>
@@ -173,7 +193,17 @@ export default function FinancePage() {
         </div>
       </div>
 
-      {loading ? (
+      {tab === 'payments' && (
+        <div className="mb-3 flex gap-1.5">
+          {([['all', 'كل المدفوعات'], ['lessons', 'دروس'], ['booklets', 'مذكرات']] as const).map(([v, l]) => (
+            <Button key={v} size="sm" variant={source === v ? 'primary' : 'secondary'} onClick={() => setSource(v)}>{l}</Button>
+          ))}
+        </div>
+      )}
+
+      {tab === 'booklets' ? (
+        <BookletsFinance />
+      ) : loading ? (
         <ListSkeleton rows={6} />
       ) : tab === 'debtors' ? (
         debtors.length === 0 ? (
@@ -223,6 +253,7 @@ export default function FinancePage() {
                     variant="ghost" size="iconSm" aria-label="إلغاء"
                     onClick={() =>
                       confirm({
+                        requirePassword: true,
                         title: 'إلغاء البند المالي',
                         message: `«${c.title}» لـ ${s?.full_name}. السجل يبقى محفوظًا للمراجعة.`,
                         confirmText: 'إلغاء البند',
@@ -266,6 +297,7 @@ export default function FinancePage() {
                   variant="ghost" size="iconSm" aria-label="إلغاء"
                   onClick={() =>
                     confirm({
+                      requirePassword: true,
                       title: 'إلغاء الدفعة',
                       message: 'سيتم إرجاع المبالغ إلى المستحقات. السجل يبقى محفوظًا.',
                       confirmText: 'إلغاء الدفعة',
