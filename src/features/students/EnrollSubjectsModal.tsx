@@ -85,12 +85,14 @@ export function EnrollSubjectsModal({
   }, [students, selectedYearId])
 
   // تصفية طلاب الصف بالبحث
+  // البحث يشمل كل الطلاب (بأي صف)، وطلاب الصف المختار يظهروا الأول
   const filteredGradeStudents = useMemo(() => {
     if (!studentSearch.trim()) return gradeStudents.slice(0, 30)
-    return gradeStudents
-      .filter((s) => matches(s.full_name, studentSearch) || matches(s.specialization || '', studentSearch))
+    return students
+      .filter((s) => matches(s.full_name, studentSearch) || matches(s.specialization || '', studentSearch) || matches(s.code ?? '', studentSearch))
+      .sort((a, b) => Number(b.year_id === selectedYearId) - Number(a.year_id === selectedYearId))
       .slice(0, 30)
-  }, [gradeStudents, studentSearch])
+  }, [students, gradeStudents, studentSearch, selectedYearId])
 
   // المواد الخاصة بالصف المحدد
   const yearSubjects = useMemo(() => {
@@ -192,6 +194,12 @@ export function EnrollSubjectsModal({
         }
       }
 
+      // لو الطالب ملوش صف أو صفه مختلف عن الصف المختار، نسجّل الصف في بياناته
+      const st = students.find((x) => x.id === selectedStudentId)
+      if (st && selectedYearId && st.year_id !== selectedYearId) {
+        await api.saveStudent({ id: st.id, year_id: selectedYearId, group_id: null })
+      }
+
       return await api.enrollStudentInMultipleSubjects({
         studentId: selectedStudentId,
         subjectIds: Array.from(pickedSubjectIds),
@@ -230,7 +238,7 @@ export function EnrollSubjectsModal({
                   setCustomPrices({})
                 }
               }}
-              disabled={!!initialStudentId}
+              disabled={!!initialStudentId && !!students.find((x) => x.id === initialStudentId)?.year_id}
             >
               {years.map((y) => (
                 <option key={y.id} value={y.id}>
@@ -286,7 +294,7 @@ export function EnrollSubjectsModal({
           ) : (
             <div className="space-y-2">
               <Input
-                placeholder={`ابحث بالاسم في طلاب ${yearName.get(selectedYearId) || 'الصف'} (${gradeStudents.length} طالب)…`}
+                placeholder={`ابحث باسم أي طالب أو كوده (طلاب ${yearName.get(selectedYearId) || 'الصف'} يظهروا الأول)…`}
                 value={studentSearch}
                 onChange={(e) => setStudentSearch(e.target.value)}
                 autoFocus
@@ -295,7 +303,7 @@ export function EnrollSubjectsModal({
               <div className="max-h-40 overflow-y-auto rounded-xl border border-[var(--border)] bg-surface divide-y divide-[var(--border)]">
                 {filteredGradeStudents.length === 0 ? (
                   <p className="p-3 text-center text-xs text-muted">
-                    {studentSearch ? 'لا يوجد طالب بهذا الاسم في هذا الصف' : 'لا يوجد طلاب مسجلون في هذا الصف'}
+                    {studentSearch ? 'لا يوجد طالب بهذا الاسم' : 'لا يوجد طلاب مسجلون في هذا الصف'}
                   </p>
                 ) : (
                   filteredGradeStudents.map((st) => (
@@ -307,7 +315,9 @@ export function EnrollSubjectsModal({
                     >
                       <div>
                         <p className="text-xs font-bold text-ink">{st.full_name}</p>
-                        <p className="text-[11px] text-muted">{st.specialization || 'عام'}</p>
+                        <p className="text-[11px] text-muted">
+                          {(st.year_id && yearName.get(st.year_id)) || 'بدون صف'} • {st.specialization || 'عام'}
+                        </p>
                       </div>
                       <Badge variant={st.is_enrolled ? 'default' : 'secondary'} className="text-[10px]">
                         {st.is_enrolled ? 'مشترك بالدروس' : 'طالب مدرسة'}

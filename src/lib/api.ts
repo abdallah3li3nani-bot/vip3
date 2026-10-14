@@ -29,6 +29,7 @@ import type {
   AppSettings,
   DashboardStats,
 } from './database.types'
+import { GRADE_LABEL, normalizeGradeText, yearLevel, type GradeLevel } from './grades'
 
 /* ============================ السنوات الدراسية ============================ */
 export const listYears = async (): Promise<AcademicYear[]> => {
@@ -152,23 +153,88 @@ export const deleteStudent = async (id: string): Promise<void> => {
   }
 }
 
+/**
+ * التأكد من وجود الصفوف الثلاثة في التطبيق وإرجاع خريطة: رقم الصف ← معرّف السنة الدراسية.
+ * لو الصف موجود بأي اسم (مثلاً "أولى ثانوي") يُستخدم كما هو، ولو مش موجود يتعمل.
+ */
+export const ensureGradeYears = async (): Promise<Record<GradeLevel, string>> => {
+  const years = await dbGetAll<AcademicYear>('years')
+  const map = {} as Record<GradeLevel, string>
+  for (const y of years.sort((a, b) => a.sort_order - b.sort_order)) {
+    const lvl = yearLevel(y)
+    if (lvl && !map[lvl]) map[lvl] = y.id
+  }
+  for (const lvl of [1, 2, 3] as GradeLevel[]) {
+    if (map[lvl]) continue
+    const row: AcademicYear = {
+      id: years.some((y) => y.id === `year_grade_${lvl}`) ? uid() : `year_grade_${lvl}`,
+      name: `${GRADE_LABEL[lvl]} الثانوي`,
+      sort_order: lvl,
+      is_active: true,
+      created_at: new Date().toISOString(),
+    }
+    await dbPut('years', row)
+    map[lvl] = row.id
+  }
+  return map
+}
+
+const nameKey = (n: string) => normalizeGradeText(n).replace(/\s+/g, ' ')
+
+/**
+ * استيراد كشف طلاب من الإكسيل مع التعرف على صف كل طالب.
+ * - الطالب الجديد يتضاف في صفه.
+ * - الطالب الموجود بنفس الاسم يتحدّث صفه وتخصصه (يصلح أي استيراد قديم اتعمل غلط).
+ * - الطلاب اللي صفهم مش واضح يروحوا للصف الاحتياطي المختار.
+ */
 export const bulkImportStudents = async (
-  studentsList: { full_name: string; specialization?: string }[],
-  yearId: string,
-): Promise<{ added: number; skipped: number }> => {
+  studentsList: { full_name: string; specialization?: string; grade_level?: GradeLevel | null }[],
+  fallbackYearId?: string | null,
+): Promise<{ added: number; updated: number; skipped: number; unknownGrade: number }> => {
+  const gradeYears = await ensureGradeYears()
   const existing = await dbGetAll<Student>('students')
-  const existingNames = new Set(existing.map((s) => s.full_name.trim().toLowerCase()))
+  const byName = new Map<string, Student[]>()
+  for (const st of existing) {
+    const k = nameKey(st.full_name)
+    byName.set(k, [...(byName.get(k) || []), st])
+  }
+  const touched = new Set<string>()
   let codeSeq = Number((await nextStudentCode(existing)).slice(1))
   const now = new Date().toISOString()
 
   let added = 0
+  let updated = 0
   let skipped = 0
+  let unknownGrade = 0
 
   for (const item of studentsList) {
-    const cleanName = item.full_name.trim()
+    const cleanName = item.full_name.replace(/\s+/g, ' ').trim()
     if (!cleanName) continue
-    if (existingNames.has(cleanName.toLowerCase())) {
-      skipped++
+    const yearId = item.grade_level ? gradeYears[item.grade_level] : fallbackYearId || null
+    if (!item.grade_level) unknownGrade++
+    const spec = item.specialization?.trim() && item.specialization.trim() !== 'عام' ? item.specialization.trim() : null
+
+    const candidates = (byName.get(nameKey(cleanName)) || []).filter((c) => !touched.has(c.id))
+    const same = candidates.find((c) => c.year_id === yearId)
+    const target = same || (candidates.length === 1 && item.grade_level ? candidates[0] : undefined)
+
+    if (target) {
+      touched.add(target.id)
+      let changed = false
+      if (yearId && target.year_id !== yearId) {
+        target.year_id = yearId
+        target.group_id = null // المجموعة تابعة للصف القديم
+        changed = true
+      }
+      if (spec && target.specialization !== spec) {
+        target.specialization = spec
+        changed = true
+      }
+      if (changed) {
+        target.updated_at = now
+        await dbPut('students', target)
+        updated++
+      } else skipped++
       continue
     }
 
@@ -178,7 +244,7 @@ export const bulkImportStudents = async (
       full_name: cleanName,
       year_id: yearId,
       group_id: null,
-      specialization: item.specialization?.trim() || 'عام',
+      specialization: spec || 'عام',
       is_enrolled: false, // طلاب مدرسة في البداية حتى يشتركوا
       status: 'active',
       enrolled_at: now.slice(0, 10),
@@ -186,13 +252,12 @@ export const bulkImportStudents = async (
       created_at: now,
       updated_at: now,
     }
-
     await dbPut('students', newStudent)
-    existingNames.add(cleanName.toLowerCase())
+    touched.add(newStudent.id)
     added++
   }
 
-  return { added, skipped }
+  return { added, updated, skipped, unknownGrade }
 }
 
 /* =========================== ربط الطالب بالمواد ===========================*/
@@ -666,6 +731,16 @@ export const saveMultipleBookletOrders = async (params: {
 }): Promise<{ created: number; totalRemaining: number }> => {
   if (!params.studentId) throw new Error('يرجى اختيار الطالب')
   if (params.items.length === 0) throw new Error('يرجى اختيار مذكرة واحدة على الأقل')
+  // طالب بدون صف: نعرف صفه من صف المذكرات المحجوزة
+  const st = await dbGetById<Student>('students', params.studentId)
+  if (st && !st.year_id) {
+    const b = await dbGetById<Booklet>('booklets', params.items[0].bookletId)
+    if (b?.year_id) {
+      st.year_id = b.year_id
+      st.updated_at = new Date().toISOString()
+      await dbPut('students', st)
+    }
+  }
   let created = 0
   let totalRemaining = 0
   for (const it of params.items) {
@@ -1085,7 +1160,7 @@ export const localISO = (d: Date): string => {
 }
 
 /* ============================ ترحيل البيانات القديمة ============================ */
-const DATA_VERSION = 2
+const DATA_VERSION = 3
 
 /**
  * يُشغَّل مرة واحدة عند فتح التطبيق: يعطي الطلاب أكواداً، ويسجّل مدفوعات المذكرات القديمة
@@ -1150,7 +1225,10 @@ export const runMigrations = async (): Promise<void> => {
     }
   }
 
-  // 4) سجلات حضور تالفة من الإصدار السابق
+  // 4) التأكد من وجود الصف الأول والثاني والثالث
+  await ensureGradeYears()
+
+  // 5) سجلات حضور تالفة من الإصدار السابق
   for (const a of await dbGetAll<Attendance>('attendance')) {
     if (!a.session_id || !a.student_id) await dbDelete('attendance', a.id)
   }

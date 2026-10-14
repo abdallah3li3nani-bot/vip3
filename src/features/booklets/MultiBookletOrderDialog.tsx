@@ -62,13 +62,16 @@ export function MultiBookletOrderDialog({
     [students, yearId],
   )
 
+  // البحث يشمل كل الطلاب، وطلاب الصف المختار يظهروا الأول. اختيار الطالب يحدد صفه تلقائياً
   const filteredStudents = useMemo(() => {
     const q = search.trim()
     const list = q
-      ? gradeStudents.filter((s) => matches(s.full_name, q) || matches(s.specialization || '', q))
+      ? students
+          .filter((s) => s.status !== 'inactive' && (matches(s.full_name, q) || matches(s.specialization || '', q) || matches(s.code ?? '', q)))
+          .sort((a, b) => Number(b.year_id === yearId) - Number(a.year_id === yearId))
       : gradeStudents
     return list.slice(0, 60)
-  }, [gradeStudents, search])
+  }, [students, gradeStudents, search, yearId])
 
   const yearBooklets = useMemo(() => booklets.filter((b) => b.year_id === yearId), [booklets, yearId])
 
@@ -83,6 +86,7 @@ export function MultiBookletOrderDialog({
   const selectedStudent = students.find((s) => s.id === studentId)
 
   function pickStudent(st: Student) {
+    if (st.year_id && years.some((y) => y.id === st.year_id)) setYearId(st.year_id)
     setStudentId(st.id)
     setSearch('')
     setLines({})
@@ -137,7 +141,7 @@ export function MultiBookletOrderDialog({
       r.totalRemaining > 0
         ? `تم حجز ${r.created} مذكرة ✓ ومتبقي على الطالب ${fmtMoney(r.totalRemaining)}`
         : `تم حجز ${r.created} مذكرة ✓ ومسددة بالكامل`,
-    invalidate: [['booklet_orders'], ['dashboard'], ['payments']],
+    invalidate: [['booklet_orders'], ['dashboard'], ['payments'], ['students']],
     onDone: () => onOpenChange(false),
   })
 
@@ -206,7 +210,7 @@ export function MultiBookletOrderDialog({
           ) : (
             <div className="space-y-2">
               <Input
-                placeholder={`ابحث بالاسم في طلاب ${yearName(yearId) || 'الصف'}…`}
+                placeholder={`ابحث باسم أي طالب أو كوده (طلاب ${yearName(yearId) || 'الصف'} يظهروا الأول)…`}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 autoFocus
@@ -214,7 +218,7 @@ export function MultiBookletOrderDialog({
               <div className="max-h-44 divide-y divide-[var(--border)] overflow-y-auto rounded-xl border border-[var(--border)] bg-surface">
                 {filteredStudents.length === 0 ? (
                   <p className="p-3 text-center text-xs text-muted">
-                    {search ? 'لا يوجد طالب بهذا الاسم في هذا الصف' : 'لا يوجد طلاب مسجلون في هذا الصف'}
+                    {search ? 'لا يوجد طالب بهذا الاسم' : 'لا يوجد طلاب مسجلون في هذا الصف'}
                   </p>
                 ) : (
                   filteredStudents.map((s) => {
@@ -228,7 +232,9 @@ export function MultiBookletOrderDialog({
                       >
                         <div>
                           <span className="block text-xs font-bold text-ink">{s.full_name}</span>
-                          <span className="text-[11px] text-muted">{s.specialization || 'عام'}</span>
+                          <span className="text-[11px] text-muted">
+                            {yearName(s.year_id) || 'بدون صف'} • {s.specialization || 'عام'}
+                          </span>
                         </div>
                         {count > 0 && (
                           <Badge tone="info" className="text-[10px]">
