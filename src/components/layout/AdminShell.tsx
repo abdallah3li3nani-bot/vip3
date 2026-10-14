@@ -217,6 +217,7 @@ export function AdminShell() {
                 <div className="px-2.5 py-2">
                   <p className="text-[13px] font-bold text-ink">{settings.teacher_name || 'المدرّس'}</p>
                   <p className="text-[11px] text-muted">صلاحيات كاملة</p>
+                  <p className="mt-1 text-[10.5px] text-muted">إصدار التطبيق: {__APP_BUILD__}</p>
                 </div>
                 <DropdownSeparator />
                 <DropdownItem onSelect={() => nav('/settings')}>الإعدادات</DropdownItem>

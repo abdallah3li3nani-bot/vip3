@@ -8,6 +8,7 @@ import { AuthProvider } from './store/auth'
 import { SettingsProvider } from './store/settings'
 import { ConfirmProvider } from './components/ui'
 import { ErrorBoundary } from './components/ErrorBoundary'
+import { UpdatePrompt } from './components/UpdatePrompt'
 import { applyTheme, useUi } from './store/ui'
 import './index.css'
 import { runMigrations } from './lib/api'
@@ -37,6 +38,7 @@ runMigrations()
           <ConfirmProvider>
             <HashRouter>
               <App />
+              <UpdatePrompt />
             </HashRouter>
             <Toaster
               position="top-center"
@@ -52,19 +54,6 @@ runMigrations()
     </ErrorBoundary>
   </StrictMode>,
   ))
-
-/**
- * تحديث تلقائي: عند نشر نسخة جديدة يتولّى Service Worker الجديد التحكّم،
- * فنعيد التحميل مرة واحدة حتى لا يبقى المستخدم على نسخة قديمة من التطبيق.
- */
-if ('serviceWorker' in navigator) {
-  let reloading = false
-  navigator.serviceWorker.addEventListener('controllerchange', () => {
-    if (reloading) return
-    reloading = true
-    location.reload()
-  })
-}
 
 // إزالة شاشة الإقلاع
 requestAnimationFrame(() => {

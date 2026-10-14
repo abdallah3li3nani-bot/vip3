@@ -29,7 +29,7 @@ import type {
   AppSettings,
   DashboardStats,
 } from './database.types'
-import { GRADE_LABEL, normalizeGradeText, yearLevel, type GradeLevel } from './grades'
+import { GRADE_LABEL, normalizeGradeText, parseGradeLevel, yearLevel, type GradeLevel } from './grades'
 
 /* ============================ السنوات الدراسية ============================ */
 export const listYears = async (): Promise<AcademicYear[]> => {
@@ -179,6 +179,17 @@ export const ensureGradeYears = async (): Promise<Record<GradeLevel, string>> =>
   return map
 }
 
+/** هل النص المكتوب في التخصص هو في الحقيقة صف دراسي؟ (مثل "الصف الاول" أو "2" أو "two") */
+const gradeLikeSpec = (spec?: string | null): GradeLevel | null => {
+  const t = normalizeGradeText(spec)
+  if (!t || t.split(' ').length > 4) return null
+  const lvl = parseGradeLevel(t)
+  if (!lvl) return null
+  // نتأكد إن مفيش كلمة تخصص حقيقية جنب الرقم (زي "كهرباء 1")
+  const rest = t.replace(/(ال)?(صف|فرقه|سنه|ثانوي[ه]?|صناعي[ه]?|اول[يه]?|ثاني[ه]?|تاني[ه]?|ثالث[ه]?|تالت[ه]?|one|two|tow|three|first|second|third|grade|\d)/g, '').trim()
+  return rest ? null : lvl
+}
+
 const nameKey = (n: string) => normalizeGradeText(n).replace(/\s+/g, ' ')
 
 /**
@@ -212,7 +223,8 @@ export const bulkImportStudents = async (
     if (!cleanName) continue
     const yearId = item.grade_level ? gradeYears[item.grade_level] : fallbackYearId || null
     if (!item.grade_level) unknownGrade++
-    const spec = item.specialization?.trim() && item.specialization.trim() !== 'عام' ? item.specialization.trim() : null
+    const rawSpec = item.specialization?.trim()
+    const spec = rawSpec && rawSpec !== 'عام' && !gradeLikeSpec(rawSpec) ? rawSpec : null
 
     const candidates = (byName.get(nameKey(cleanName)) || []).filter((c) => !touched.has(c.id))
     const same = candidates.find((c) => c.year_id === yearId)
@@ -224,6 +236,10 @@ export const bulkImportStudents = async (
       if (yearId && target.year_id !== yearId) {
         target.year_id = yearId
         target.group_id = null // المجموعة تابعة للصف القديم
+        changed = true
+      }
+      if (!spec && gradeLikeSpec(target.specialization)) {
+        target.specialization = 'عام'
         changed = true
       }
       if (spec && target.specialization !== spec) {
@@ -1160,7 +1176,7 @@ export const localISO = (d: Date): string => {
 }
 
 /* ============================ ترحيل البيانات القديمة ============================ */
-const DATA_VERSION = 3
+const DATA_VERSION = 4
 
 /**
  * يُشغَّل مرة واحدة عند فتح التطبيق: يعطي الطلاب أكواداً، ويسجّل مدفوعات المذكرات القديمة
@@ -1226,7 +1242,19 @@ export const runMigrations = async (): Promise<void> => {
   }
 
   // 4) التأكد من وجود الصف الأول والثاني والثالث
-  await ensureGradeYears()
+  const gradeYears = await ensureGradeYears()
+
+  // 4-ب) الاستيراد القديم كان بيحط الصف في خانة التخصص (مثلاً "الصف الاول"):
+  // ننقله لصف الطالب الصحيح ونرجّع التخصص "عام"
+  for (const st of await dbGetAll<Student>('students')) {
+    const lvl = gradeLikeSpec(st.specialization)
+    if (!lvl) continue
+    st.year_id = gradeYears[lvl]
+    st.group_id = null
+    st.specialization = 'عام'
+    st.updated_at = new Date().toISOString()
+    await dbPut('students', st)
+  }
 
   // 5) سجلات حضور تالفة من الإصدار السابق
   for (const a of await dbGetAll<Attendance>('attendance')) {
